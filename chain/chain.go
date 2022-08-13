@@ -5,6 +5,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/baetyl/baetyl-go/v2/context"
 	"github.com/baetyl/baetyl-go/v2/errors"
 	"github.com/baetyl/baetyl-go/v2/log"
 	v2plugin "github.com/baetyl/baetyl-go/v2/plugin"
@@ -20,6 +21,9 @@ import (
 
 const (
 	MsgTimeout = time.Minute * 10
+	Localhost  = "127.0.0.1"
+
+	ExitCmd = "exit\n"
 )
 
 //go:generate mockgen -destination=../mock/chain.go -package=mock -source=chain.go Chain
@@ -35,21 +39,20 @@ var (
 )
 
 type chain struct {
-	ami       ami.AMI
-	data      map[string]string
-	token     string
-	name      string
-	namespace string
-	container string
-	upside    string
-	downside  string
-	logOpt    *ami.LogsOptions
-	pb        plugin.Pubsub
-	subChan   <-chan interface{}
-	processor pubsub.Processor
-	pipe      ami.Pipe
-	tomb      utils.Tomb
-	log       *log.Logger
+	ami          ami.AMI
+	data         map[string]string
+	token        string
+	upside       string
+	downside     string
+	mode         string
+	debugOptions *ami.DebugOptions
+	logOpt       *ami.LogsOptions
+	pb           plugin.Pubsub
+	subChan      <-chan interface{}
+	processor    pubsub.Processor
+	pipe         ami.Pipe
+	tomb         utils.Tomb
+	log          *log.Logger
 }
 
 func NewChain(cfg config.Config, a ami.AMI, data map[string]string) (Chain, error) {
@@ -90,9 +93,40 @@ func NewChain(cfg config.Config, a ami.AMI, data map[string]string) (Chain, erro
 		c.log.Debug("no container specified")
 	}
 
-	c.name = name
-	c.namespace = namespace
-	c.container = container
+	c.mode = context.RunMode()
+	cmd := []string{
+		"sh",
+		"-c",
+		"/bin/sh",
+	}
+	var opt ami.DebugOptions
+	opt.KubeDebugOptions = ami.KubeDebugOptions{
+		Namespace: namespace,
+		Name:      name,
+		Container: container,
+		Command:   cmd,
+	}
+	if c.mode == context.RunModeNative {
+		port, ok := data["port"]
+		if !ok {
+			return nil, ErrParseData
+		}
+		userName, ok := data["userName"]
+		if !ok {
+			return nil, ErrParseData
+		}
+		password, ok := data["password"]
+		if !ok {
+			return nil, ErrParseData
+		}
+		opt.NativeDebugOptions = ami.NativeDebugOptions{
+			IP:       Localhost,
+			Port:     port,
+			Username: userName,
+			Password: password,
+		}
+	}
+	c.debugOptions = &opt
 	c.downside = fmt.Sprintf("%s_%s_%s_%s_%s", namespace, name, container, token, "down")
 
 	c.log.Debug("chain sub downside topic", log.Any("topic", c.downside))

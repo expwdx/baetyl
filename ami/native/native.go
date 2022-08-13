@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/baetyl/baetyl-go/v2/context"
 	"github.com/baetyl/baetyl-go/v2/errors"
@@ -17,9 +20,12 @@ import (
 	"github.com/baetyl/baetyl-go/v2/utils"
 	"github.com/kardianos/service"
 	"github.com/shirou/gopsutil/cpu"
+	gdisk "github.com/shirou/gopsutil/disk"
 	"github.com/shirou/gopsutil/host"
 	"github.com/shirou/gopsutil/mem"
 	"github.com/shirou/gopsutil/process"
+	gnet "github.com/shirou/gopsutil/v3/net"
+	"golang.org/x/crypto/ssh"
 	"gopkg.in/yaml.v2"
 
 	"github.com/baetyl/baetyl/v2/ami"
@@ -31,6 +37,14 @@ var (
 	ErrCreateService = errors.New("failed to create service")
 )
 
+const (
+	Rows     = 80
+	Cols     = 160
+	TtySpeed = 14400
+	Term     = "xterm"
+	Network  = "tcp"
+)
+
 func init() {
 	ami.Register("native", newNativeImpl)
 }
@@ -38,6 +52,7 @@ func init() {
 type nativeImpl struct {
 	logHostPath   string
 	runHostPath   string
+	hostPathLib   string
 	mapping       *native.ServiceMapping
 	portAllocator *native.PortAllocator
 	log           *log.Logger
@@ -59,6 +74,7 @@ func newNativeImpl(cfg config.AmiConfig) (ami.AMI, error) {
 	return &nativeImpl{
 		logHostPath:   filepath.Join(hostPathLib, "log"),
 		runHostPath:   filepath.Join(hostPathLib, "run"),
+		hostPathLib:   hostPathLib,
 		mapping:       mapping,
 		portAllocator: portAllocator,
 		log:           log.With(log.Any("ami", "native")),
@@ -70,14 +86,60 @@ func (impl *nativeImpl) UpdateNodeLabels(string, map[string]string) error {
 	return errors.New("failed to update node label, function has not been implemented")
 }
 
-// TODO: impl native RemoteCommand
-func (impl *nativeImpl) RemoteCommand(*ami.DebugOptions, ami.Pipe) error {
-	return errors.New("failed to start remote debugging, function has not been implemented")
+// RemoteCommand Implement of native
+func (impl *nativeImpl) RemoteCommand(option *ami.DebugOptions, pipe ami.Pipe) error {
+	cfg := &ssh.ClientConfig{
+		User: option.Username,
+		Auth: []ssh.AuthMethod{
+			ssh.Password(option.Password),
+		},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+	}
+	server := fmt.Sprintf("%s:%s", option.IP, option.Port)
+	conn, err := ssh.Dial(Network, server, cfg)
+	if err != nil {
+		return errors.Trace(err)
+	}
+	defer conn.Close()
+
+	session, err := conn.NewSession()
+	if err != nil {
+		return errors.Trace(err)
+	}
+	defer session.Close()
+
+	session.Stdout = pipe.OutWriter
+	session.Stderr = pipe.OutWriter
+	session.Stdin = pipe.InReader
+
+	modes := ssh.TerminalModes{
+		ssh.ECHO:          1,        // enable echo
+		ssh.TTY_OP_ISPEED: TtySpeed, // input speed = 14.4kbaud
+		ssh.TTY_OP_OSPEED: TtySpeed, // output speed = 14.4kbaud
+	}
+
+	// TODO: support window resize
+	if err = session.RequestPty(Term, Rows, Cols, modes); err != nil {
+		return errors.Trace(err)
+	}
+	// Start remote shell
+	if err = session.Shell(); err != nil {
+		return errors.Trace(err)
+	}
+	err = session.Wait()
+	if err != nil {
+		impl.log.Warn("ssh session log out with exception")
+	}
+	return nil
 }
 
 // TODO: impl native RemoteLogs
 func (impl *nativeImpl) RemoteLogs(*ami.LogsOptions, ami.Pipe) error {
 	return errors.New("failed to start remote debugging, function has not been implemented")
+}
+
+func (impl *nativeImpl) GetModeInfo() (interface{}, error) {
+	return "", nil
 }
 
 func (impl *nativeImpl) GetMasterNodeName() string {
@@ -193,6 +255,7 @@ func (impl *nativeImpl) ApplyApp(ns string, app v1.Application, configs map[stri
 			env := []string{
 				// MacOS won't set PATH, but function runtimes need it
 				fmt.Sprintf("%s=%s", "PATH", os.Getenv("PATH")),
+				fmt.Sprintf("%s=%s", context.KeyBaetylHostPathLib, impl.hostPathLib),
 			}
 			for _, item := range s.Env {
 				env = append(env, fmt.Sprintf("%s=%s", item.Name, item.Value))
@@ -221,9 +284,10 @@ func (impl *nativeImpl) ApplyApp(ns string, app v1.Application, configs map[stri
 			}
 			svc, err := service.New(nil, &service.Config{
 				Name:             prgCfg.Name,
+				DisplayName:      prgCfg.Name,
 				Description:      prgCfg.Description,
 				WorkingDirectory: insDir,
-				Arguments:        []string{"program"},
+				Arguments:        []string{"program", insDir},
 			})
 			if err != nil {
 				return errors.Trace(err)
@@ -247,11 +311,20 @@ func (impl *nativeImpl) ApplyApp(ns string, app v1.Application, configs map[stri
 		}
 
 		if len(ports) > 0 {
-			err := impl.mapping.SetServicePorts(s.Name, ports)
-			if err != nil {
-				return errors.Trace(err)
+			if app.Type == v1.AppTypeContainer {
+				err := impl.mapping.SetServicePorts(s.Name, ports)
+				if err != nil {
+					return errors.Trace(err)
+				}
+				impl.log.Debug("set applied service ports in mapping files", log.Any("applied service", s.Name), log.Any("ports", ports))
+			} else {
+				// native function use app name
+				err := impl.mapping.SetServicePorts(app.Name, ports)
+				if err != nil {
+					return errors.Trace(err)
+				}
+				impl.log.Debug("set applied service ports in mapping files", log.Any("applied service", app.Name), log.Any("ports", ports))
 			}
-			impl.log.Debug("set applied service ports in mapping files", log.Any("applied service", s.Name), log.Any("ports", ports))
 		}
 	}
 	impl.log.Info("apply an app", log.Any("app", app))
@@ -455,7 +528,7 @@ func getServiceInsStats(svc service.Service) (map[string]string, error) {
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
-	proc, err := process.NewProcess(pid)
+	proc, err := process.NewProcess(int32(pid))
 	if err != nil {
 		return nil, errors.Trace(err)
 	}
@@ -515,7 +588,18 @@ func (impl *nativeImpl) CollectNodeInfo() (map[string]interface{}, error) {
 		return nil, errors.Trace(err)
 	}
 	plat := context.Platform()
-	// TODO add address
+	ias, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	var addrs []string
+	for _, ia := range ias {
+		if ipnet, ok := ia.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			if ipnet.IP.To4() != nil {
+				addrs = append(addrs, ipnet.IP.String())
+			}
+		}
+	}
 	return map[string]interface{}{
 		ho.Hostname: &v1.NodeInfo{
 			Arch:     runtime.GOARCH,
@@ -524,6 +608,7 @@ func (impl *nativeImpl) CollectNodeInfo() (map[string]interface{}, error) {
 			HostID:   ho.HostID,
 			Hostname: ho.Hostname,
 			Role:     "master",
+			Address:  strings.Join(addrs, ","),
 		},
 	}, nil
 }
@@ -532,6 +617,8 @@ func (impl *nativeImpl) CollectNodeStats() (map[string]interface{}, error) {
 	stats := &v1.NodeStats{
 		Usage:    map[string]string{},
 		Capacity: map[string]string{},
+		Percent:  map[string]string{},
+		NetIO:    map[string]string{},
 	}
 	ho, err := host.Info()
 	if err != nil {
@@ -559,11 +646,44 @@ func (impl *nativeImpl) CollectNodeStats() (map[string]interface{}, error) {
 	stats.Capacity["memory"] = strconv.FormatUint(me.Total, 10)
 	stats.Usage["memory"] = strconv.FormatUint(me.Used, 10)
 
+	disk, err := gdisk.Usage("/")
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	stats.Capacity["disk"] = strconv.FormatUint(disk.Total, 10)
+	stats.Usage["disk"] = strconv.FormatUint(disk.Used, 10)
+	diskPercent := float64(disk.Used) / float64(disk.Total)
+	stats.Percent["disk"] = strconv.FormatFloat(diskPercent, 'f', -1, 64)
+
+	netIO, err := gnet.IOCounters(false)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	// sleep 1s to get net speed
+	time.Sleep(1000 * time.Millisecond)
+	netIOSecond, err := gnet.IOCounters(false)
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+	InBytes := netIOSecond[0].BytesRecv - netIO[0].BytesRecv
+	OutBytes := netIOSecond[0].BytesSent - netIO[0].BytesSent
+	InPackets := netIOSecond[0].PacketsRecv - netIO[0].PacketsRecv
+	OutPackets := netIOSecond[0].PacketsSent - netIO[0].PacketsSent
+
+	stats.NetIO["netBytesSent"] = strconv.FormatUint(OutBytes, 10)
+	stats.NetIO["netBytesRecv"] = strconv.FormatUint(InBytes, 10)
+	stats.NetIO["netPacketsSent"] = strconv.FormatUint(OutPackets, 10)
+	stats.NetIO["netPacketsRecv"] = strconv.FormatUint(InPackets, 10)
+
 	// TODO add pressure flags
 	return map[string]interface{}{ho.Hostname: stats}, nil
 }
 
 func (impl *nativeImpl) FetchLog(namespace, service string, tailLines, sinceSeconds int64) (io.ReadCloser, error) {
+	panic("implement me")
+}
+
+func (impl *nativeImpl) RPCApp(url string, req *v1.RPCRequest) (*v1.RPCResponse, error) {
 	panic("implement me")
 }
 

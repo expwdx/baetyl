@@ -20,6 +20,8 @@ import (
 	bh "github.com/timshannon/bolthold"
 	"github.com/valyala/fasthttp"
 
+	"github.com/baetyl/baetyl/v2/ami/kube"
+
 	"github.com/baetyl/baetyl/v2/config"
 	"github.com/baetyl/baetyl/v2/mock"
 	"github.com/baetyl/baetyl/v2/node"
@@ -114,10 +116,11 @@ func TestCollect(t *testing.T) {
 	ns := context.EdgeNamespace()
 	apps := []specv1.AppInfo{info}
 	appStats := []specv1.AppStats{{AppInfo: info}}
-	mockAmi.EXPECT().GetMasterNodeName().Return("knn").AnyTimes()
+	os.Setenv(kube.KubeNodeName, "knn")
 	mockAmi.EXPECT().CollectNodeInfo().Return(nodeInfo, nil)
 	mockAmi.EXPECT().CollectNodeStats().Return(nodeStats, nil)
 	mockAmi.EXPECT().StatsApps(gomock.Any()).Return(appStats, nil)
+	mockAmi.EXPECT().GetModeInfo().Return("modeinfo", nil)
 	res := e.Collect(ns, false, nil)
 	resNode := res["node"]
 	resNodeStats := res["nodestats"]
@@ -131,6 +134,7 @@ func TestCollect(t *testing.T) {
 	mockAmi.EXPECT().CollectNodeInfo().Return(nil, errors.New("failed to get node info"))
 	mockAmi.EXPECT().CollectNodeStats().Return(nodeStats, nil)
 	mockAmi.EXPECT().StatsApps(gomock.Any()).Return(appStats, nil)
+	mockAmi.EXPECT().GetModeInfo().Return("modeinfo", nil)
 	res = e.Collect(ns, false, nil)
 	resNode = res["node"]
 	assert.Nil(t, resNode)
@@ -138,6 +142,7 @@ func TestCollect(t *testing.T) {
 	mockAmi.EXPECT().CollectNodeInfo().Return(nodeInfo, nil)
 	mockAmi.EXPECT().CollectNodeStats().Return(nil, errors.New("failed to get node stats"))
 	mockAmi.EXPECT().StatsApps(gomock.Any()).Return(appStats, nil)
+	mockAmi.EXPECT().GetModeInfo().Return("modeinfo", nil)
 	res = e.Collect(ns, false, nil)
 	resNodeStats = res["nodestats"]
 	assert.Nil(t, resNodeStats)
@@ -145,6 +150,7 @@ func TestCollect(t *testing.T) {
 	mockAmi.EXPECT().CollectNodeInfo().Return(nodeInfo, nil)
 	mockAmi.EXPECT().CollectNodeStats().Return(nodeStats, nil)
 	mockAmi.EXPECT().StatsApps(gomock.Any()).Return(nil, errors.New("failed to get app stats"))
+	mockAmi.EXPECT().GetModeInfo().Return("modeinfo", nil)
 	res = e.Collect(ns, false, nil)
 	resApps = res["apps"]
 	resAppStats = res["appstats"]
@@ -155,7 +161,7 @@ func TestCollect(t *testing.T) {
 }
 
 func TestEngine(t *testing.T) {
-	eng, err := NewEngine(config.Config{}, nil, nil, nil)
+	eng, err := NewEngine(config.Config{}, nil, nil, nil, nil)
 	assert.Error(t, err, os.ErrInvalid.Error())
 	assert.Nil(t, eng)
 }
@@ -258,11 +264,12 @@ func TestReportAndApply(t *testing.T) {
 	infos := map[string]interface{}{}
 	stats := map[string]interface{}{}
 
-	mockAmi.EXPECT().GetMasterNodeName().Return("knn").AnyTimes()
+	os.Setenv(kube.KubeNodeName, "knn")
 	mockAmi.EXPECT().CollectNodeInfo().Return(infos, nil)
 	mockAmi.EXPECT().CollectNodeStats().Return(stats, nil)
 	appStats := []specv1.AppStats{{AppInfo: specv1.AppInfo{Name: "app1", Version: "v1"}}, {AppInfo: specv1.AppInfo{Name: "app2", Version: "v2"}}}
 	mockAmi.EXPECT().StatsApps(gomock.Any()).Return(appStats, nil)
+	mockAmi.EXPECT().GetModeInfo().Return("modeinfo", nil)
 
 	reApp := specv1.Report{
 		"apps": []specv1.AppInfo{{Name: "app1", Version: "v1"}, {Name: "app2", Version: "v2"}},
@@ -292,6 +299,7 @@ func TestReportAndApply(t *testing.T) {
 	mockAmi.EXPECT().CollectNodeStats().Return(nil, nil)
 	appStats = []specv1.AppStats{{AppInfo: specv1.AppInfo{Name: "app1", Version: "v1"}}}
 	mockAmi.EXPECT().StatsApps(gomock.Any()).Return(appStats, nil)
+	mockAmi.EXPECT().GetModeInfo().Return("modeinfo", nil)
 	reApp = specv1.Report{
 		"apps": []specv1.AppInfo{{Name: "app1", Version: "v1"}},
 	}

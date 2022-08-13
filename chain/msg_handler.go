@@ -1,6 +1,9 @@
 package chain
 
 import (
+	"bytes"
+	"time"
+
 	"github.com/baetyl/baetyl-go/v2/errors"
 	"github.com/baetyl/baetyl-go/v2/log"
 	v1 "github.com/baetyl/baetyl-go/v2/spec/v1"
@@ -34,7 +37,9 @@ func (h *chainHandler) OnMessage(msg interface{}) error {
 			}
 			return errors.Trace(err)
 		}
-
+		if bytes.Equal([]byte(ExitCmd), cmd) {
+			return h.onExitMessage(cmd)
+		}
 		_, err = h.pipe.InWriter.Write(cmd)
 		if err != nil {
 			h.log.Error("failed to write debug command", log.Error(err))
@@ -57,6 +62,20 @@ func (h *chainHandler) OnMessage(msg interface{}) error {
 	return nil
 }
 
+func (h *chainHandler) onExitMessage(cmd []byte) error {
+	closeTimer := time.NewTimer(time.Second * 2)
+	defer closeTimer.Stop()
+	go func() {
+		_, err := h.pipe.InWriter.Write(cmd)
+		if err != nil {
+			h.log.Error("failed to write debug command", log.Error(err))
+		}
+		closeTimer.Reset(0)
+	}()
+	<-closeTimer.C
+	return h.pipe.InWriter.Close()
+}
+
 func (h *chainHandler) OnTimeout() error {
 	err := h.pb.Publish(h.upside, &v1.Message{
 		Kind: v1.MessageData,
@@ -72,9 +91,9 @@ func (h *chainHandler) OnTimeout() error {
 	return h.pb.Publish(sync.TopicDownside, &v1.Message{
 		Kind: v1.MessageCMD,
 		Metadata: map[string]string{
-			"namespace": h.namespace,
-			"name":      h.name,
-			"container": h.container,
+			"namespace": h.debugOptions.Namespace,
+			"name":      h.debugOptions.Name,
+			"container": h.debugOptions.Container,
 			"token":     h.token,
 			"cmd":       "disconnect",
 		},

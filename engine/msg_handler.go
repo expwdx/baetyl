@@ -3,6 +3,7 @@ package engine
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/baetyl/baetyl-go/v2/context"
@@ -22,6 +23,7 @@ const (
 	ErrPublishDownsideChain = "failed to publish downside chain"
 	ErrExecData             = "failed to exec"
 	ErrSubNodeName          = "failed to get sub node name"
+	ErrAgentNotSet          = "failed to request for the not set agent"
 	ErrTimeout              = "engine timeout"
 )
 
@@ -69,6 +71,16 @@ func (h *handlerDownside) OnMessage(msg interface{}) error {
 			err := h.labelMultiNodes(key, m)
 			if err != nil {
 				return err
+			}
+		case v1.MessageRPC:
+			err := h.rpc(key, m)
+			if err != nil {
+				return errors.Trace(err)
+			}
+		case v1.MessageAgent:
+			err := h.agentControl(key, m)
+			if err != nil {
+				return errors.Trace(err)
 			}
 		default:
 			h.log.Debug("unknown command", log.Any("cmd", m.Metadata["cmd"]))
@@ -163,11 +175,24 @@ func (h *handlerDownside) connect(key string, m *v1.Message) error {
 	return nil
 }
 
+func (h *handlerDownside) sendExit(key string) {
+	m := &v1.Message{
+		Kind:    v1.MessageData,
+		Content: v1.LazyValue{Value: []byte(chain.ExitCmd)},
+	}
+	downside := fmt.Sprintf("%s_%s", key, "down")
+	err := h.pb.Publish(downside, m)
+	if err != nil {
+		h.log.Error(ErrPublishDownsideChain, log.Error(errors.Trace(err)))
+	}
+}
+
 func (h *handlerDownside) disconnect(key string, m *v1.Message) error {
 	c, ok := h.chains.Load(key)
 	if !ok {
 		return nil
 	}
+	h.sendExit(key)
 	err := c.(chain.Chain).Close()
 	if err != nil {
 		h.publishFailedMsg(key, ErrCloseChain, m)
@@ -248,4 +273,72 @@ func (h *handlerDownside) publishSuccessMsg(key string, m *v1.Message) {
 	if errPublish != nil {
 		h.log.Error("failed to publish message", log.Any("topic", sync.TopicUpside), log.Any("chain name", key), log.Error(errPublish))
 	}
+}
+
+func (h *handlerDownside) rpc(key string, m *v1.Message) error {
+	request := &v1.RPCRequest{}
+	err := m.Content.Unmarshal(request)
+	if err != nil {
+		h.publishFailedMsg(key, err.Error(), m)
+		return errors.Trace(err)
+	}
+	res, err := h.ami.RPCApp(assembleUrl(request), request)
+	if err != nil {
+		h.publishFailedMsg(key, err.Error(), m)
+		return errors.Trace(err)
+	}
+	h.log.Debug("rpc success", log.Any("status", res.StatusCode))
+	response := &v1.Message{
+		Kind: v1.MessageCMD,
+		Metadata: map[string]string{
+			"success": "true",
+			"token":   m.Metadata["token"],
+		},
+		Content: v1.LazyValue{
+			Value: res,
+		},
+	}
+	err = h.pb.Publish(sync.TopicUpside, response)
+	if err != nil {
+		h.log.Error("failed to publish message", log.Any("topic", sync.TopicUpside), log.Any("chain name", key), log.Error(err))
+	}
+	return nil
+}
+
+func (h *handlerDownside) agentControl(key string, m *v1.Message) error {
+	if h.agentClient == nil {
+		h.publishFailedMsg(key, ErrAgentNotSet, m)
+		return errors.Trace(errors.New(ErrAgentNotSet))
+	}
+	res, err := h.agentClient.GetOrSetAgentFlag(m.Metadata["action"])
+	if err != nil {
+		h.publishFailedMsg(key, err.Error(), m)
+		return errors.Trace(err)
+	}
+	h.log.Debug("agent info", log.Any("status", res))
+	response := &v1.Message{
+		Kind: v1.MessageCMD,
+		Metadata: map[string]string{
+			"success": "true",
+			"token":   m.Metadata["token"],
+			"stat":    strconv.FormatBool(res),
+		},
+		Content: v1.LazyValue{},
+	}
+	err = h.pb.Publish(sync.TopicUpside, response)
+	if err != nil {
+		h.log.Error("failed to publish message", log.Any("topic", sync.TopicUpside), log.Any("chain name", key), log.Error(err))
+	}
+	return nil
+}
+
+func assembleUrl(req *v1.RPCRequest) string {
+	url := req.App
+	if req.System {
+		url = "https://" + url + ".baetyl-edge-system"
+	} else {
+		url = "http://" + url + ".baetyl-edge"
+	}
+	url += req.Params
+	return url
 }

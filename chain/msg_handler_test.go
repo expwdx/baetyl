@@ -31,17 +31,20 @@ func TestHandler(t *testing.T) {
 	pipe.InReader, pipe.InWriter = io.Pipe()
 	pipe.OutReader, pipe.OutWriter = io.Pipe()
 
+	var opt ami.DebugOptions
+	opt.KubeDebugOptions = ami.KubeDebugOptions{
+		Namespace: "default",
+		Name:      "baetyl-function-0",
+		Container: "function",
+		Command:   []string{},
+	}
 	cha := &chain{
-		data: map[string]string{
-			"namespace": "default",
-			"name":      "baetyl-function-0",
-			"container": "function",
-			"token":     token,
-		},
-		upside: "up",
-		pb:     pb,
-		pipe:   pipe,
-		log:    log.L().With(log.Any("chain", "test")),
+		debugOptions: &opt,
+		token:        token,
+		upside:       "up",
+		pb:           pb,
+		pipe:         pipe,
+		log:          log.L().With(log.Any("chain", "test")),
 	}
 
 	cHandler := &chainHandler{chain: cha}
@@ -78,6 +81,14 @@ func TestHandler(t *testing.T) {
 	assert.Error(t, err)
 
 	handlerWG.Add(1)
+
+	msg3 := &specV1.Message{
+		Kind:    specV1.MessageData,
+		Content: specV1.LazyValue{Value: []byte(ExitCmd)},
+	}
+	err = cHandler.OnMessage(msg3)
+	assert.NoError(t, err)
+
 	err = cHandler.OnTimeout()
 	assert.NoError(t, err)
 

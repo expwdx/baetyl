@@ -2,8 +2,10 @@ package kube
 
 import (
 	"github.com/baetyl/baetyl-go/v2/errors"
+	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/kubernetes"
 	appv1 "k8s.io/client-go/kubernetes/typed/apps/v1"
+	batchv1 "k8s.io/client-go/kubernetes/typed/batch/v1"
 	corev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -17,7 +19,9 @@ type client struct {
 	kubeConfig *rest.Config
 	core       corev1.CoreV1Interface
 	app        appv1.AppsV1Interface
+	batch      batchv1.BatchV1Interface
 	metrics    metricsv1beta1.MetricsV1beta1Interface
+	discovery  *discovery.DiscoveryClient
 }
 
 func newClient(cfg config.KubeConfig) (*client, error) {
@@ -43,6 +47,8 @@ func newClient(cfg config.KubeConfig) (*client, error) {
 		kubeConfig: kubeConfig,
 		core:       kubeClient.CoreV1(),
 		app:        kubeClient.AppsV1(),
+		batch:      kubeClient.BatchV1(),
 		metrics:    metricsCli.MetricsV1beta1(),
+		discovery:  kubeClient.DiscoveryClient,
 	}, nil
 }

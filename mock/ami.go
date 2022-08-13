@@ -35,20 +35,6 @@ func (m *MockAMI) EXPECT() *MockAMIMockRecorder {
 	return m.recorder
 }
 
-// GetMasterNodeName mocks base method
-func (m *MockAMI) GetMasterNodeName() string {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetMasterNodeName")
-	ret0, _ := ret[0].(string)
-	return ret0
-}
-
-// GetMasterNodeName indicates an expected call of GetMasterNodeName
-func (mr *MockAMIMockRecorder) GetMasterNodeName() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetMasterNodeName", reflect.TypeOf((*MockAMI)(nil).GetMasterNodeName))
-}
-
 // CollectNodeInfo mocks base method
 func (m *MockAMI) CollectNodeInfo() (map[string]interface{}, error) {
 	m.ctrl.T.Helper()
@@ -77,6 +63,21 @@ func (m *MockAMI) CollectNodeStats() (map[string]interface{}, error) {
 func (mr *MockAMIMockRecorder) CollectNodeStats() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CollectNodeStats", reflect.TypeOf((*MockAMI)(nil).CollectNodeStats))
+}
+
+// GetModeInfo mocks base method
+func (m *MockAMI) GetModeInfo() (interface{}, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetModeInfo")
+	ret0, _ := ret[0].(interface{})
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetModeInfo indicates an expected call of GetModeInfo
+func (mr *MockAMIMockRecorder) GetModeInfo() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetModeInfo", reflect.TypeOf((*MockAMI)(nil).GetModeInfo))
 }
 
 // ApplyApp mocks base method
@@ -177,4 +178,19 @@ func (m *MockAMI) UpdateNodeLabels(arg0 string, arg1 map[string]string) error {
 func (mr *MockAMIMockRecorder) UpdateNodeLabels(arg0, arg1 interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateNodeLabels", reflect.TypeOf((*MockAMI)(nil).UpdateNodeLabels), arg0, arg1)
+}
+
+// RPCApp mocks base method
+func (m *MockAMI) RPCApp(url string, req *v1.RPCRequest) (*v1.RPCResponse, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RPCApp", url, req)
+	ret0, _ := ret[0].(*v1.RPCResponse)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// RPCApp indicates an expected call of RPCApp
+func (mr *MockAMIMockRecorder) RPCApp(url, req interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RPCApp", reflect.TypeOf((*MockAMI)(nil).RPCApp), url, req)
 }

@@ -8,6 +8,7 @@ import (
 	"github.com/baetyl/baetyl-go/v2/errors"
 	"github.com/baetyl/baetyl-go/v2/log"
 	specv1 "github.com/baetyl/baetyl-go/v2/spec/v1"
+
 	"github.com/baetyl/baetyl/v2/config"
 )
 
@@ -16,6 +17,7 @@ import (
 const (
 	BaetylGPUStatsExtension  = "baetyl_gpu_stats_extension"
 	BaetylNodeStatsExtension = "baetyl_node_stats_extension"
+	BaetylQPSStatsExtension  = "baetyl_qps_stats_extension"
 )
 
 var mu sync.Mutex
@@ -37,10 +39,9 @@ type Pipe struct {
 // AMI app model interfaces
 type AMI interface {
 	// node
-	// TODO remove GetMasterNodeName
-	GetMasterNodeName() string
 	CollectNodeInfo() (map[string]interface{}, error)
 	CollectNodeStats() (map[string]interface{}, error)
+	GetModeInfo() (interface{}, error)
 
 	// app
 	ApplyApp(string, specv1.Application, map[string]specv1.Configuration, map[string]specv1.Secret) error
@@ -57,13 +58,28 @@ type AMI interface {
 	RemoteLogs(option *LogsOptions, pipe Pipe) error
 
 	UpdateNodeLabels(string, map[string]string) error
+
+	// RPCApp call baetyl app from baetyl-core
+	RPCApp(url string, req *specv1.RPCRequest) (*specv1.RPCResponse, error)
 }
 
 type DebugOptions struct {
+	KubeDebugOptions
+	NativeDebugOptions
+}
+
+type KubeDebugOptions struct {
 	Namespace string
 	Name      string
 	Container string
 	Command   []string
+}
+
+type NativeDebugOptions struct {
+	IP       string
+	Port     string
+	Username string
+	Password string
 }
 
 type LogsOptions struct {

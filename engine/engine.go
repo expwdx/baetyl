@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -24,6 +23,7 @@ import (
 	routing "github.com/qiangxue/fasthttp-routing"
 	bh "github.com/timshannon/bolthold"
 
+	"github.com/baetyl/baetyl/v2/agent"
 	"github.com/baetyl/baetyl/v2/ami"
 	"github.com/baetyl/baetyl/v2/config"
 	"github.com/baetyl/baetyl/v2/node"
@@ -61,13 +61,14 @@ type engineImpl struct {
 	log             *log.Logger
 	sec             security.Security
 	pb              plugin.Pubsub
+	agentClient     agent.AgentClient
 	downsideChan    <-chan interface{}
 	downsideProcess pubsub.Processor
 	chains          gosync.Map
 	tomb            v2utils.Tomb
 }
 
-func NewEngine(cfg config.Config, sto *bh.Store, nod node.Node, syn sync.Sync) (Engine, error) {
+func NewEngine(cfg config.Config, sto *bh.Store, nod node.Node, syn sync.Sync, agentClient agent.AgentClient) (Engine, error) {
 	mode := context.RunMode()
 	log.L().Info("app running mode", log.Any("mode", mode))
 
@@ -101,6 +102,7 @@ func NewEngine(cfg config.Config, sto *bh.Store, nod node.Node, syn sync.Sync) (
 		nod:            nod,
 		cfg:            cfg,
 		sec:            sec,
+		agentClient:    agentClient,
 		pb:             pl.(plugin.Pubsub),
 		chains:         gosync.Map{},
 		log:            log.With(),
@@ -110,6 +112,9 @@ func NewEngine(cfg config.Config, sto *bh.Store, nod node.Node, syn sync.Sync) (
 
 func (e *engineImpl) Start() {
 	e.tomb.Go(e.reporting)
+	if os.Getenv(context.KeySvcName) == specv1.BaetylCore {
+		e.tomb.Go(e.cleaning)
+	}
 	ch, err := e.pb.Subscribe(sync.TopicDownside)
 	if err != nil {
 		e.log.Error("failed to subscribe downside topic", log.Any("topic", sync.TopicDownside), log.Error(err))
@@ -229,6 +234,10 @@ func (e *engineImpl) Collect(ns string, isSys bool, desire specv1.Desire) specv1
 	if err != nil {
 		e.log.Warn("failed to collect app stats", log.Error(err))
 	}
+	modeInfo, err := e.ami.GetModeInfo()
+	if err != nil {
+		e.log.Warn("failed to get mode info", log.Error(err))
+	}
 	apps := make([]specv1.AppInfo, 0)
 	filterStats := make([]specv1.AppStats, 0)
 	for _, info := range appStats {
@@ -244,6 +253,7 @@ func (e *engineImpl) Collect(ns string, isSys bool, desire specv1.Desire) specv1
 	}
 	r := specv1.Report{
 		"time":      time.Now(),
+		"modeinfo":  modeInfo,
 		"node":      nodeInfo,
 		"nodestats": nodeStats,
 	}
@@ -300,8 +310,9 @@ func (e *engineImpl) reportAndApply(isSys, delete bool, desire specv1.Desire) er
 		return errors.Trace(err)
 	}
 	// will remove invalid app info in update
-	checkService(dapps, appData, stats, update)
-	checkPort(dapps, appData, stats, update)
+	// multiple apps change to multiple containers , remove checkService
+	// checkService(dapps, appData, stats, update)
+	checkMultiAppPort(dapps, appData, stats, update)
 	if err = e.reportAppStatsIfNeed(isSys, r, stats); err != nil {
 		return errors.Trace(err)
 	}
@@ -445,8 +456,14 @@ func (e *engineImpl) injectCert(app *specv1.Application, secs map[string]specv1.
 				net.IPv4(127, 0, 0, 1),
 			},
 			DNSNames: []string{
+				fmt.Sprintf("%s.%s", app.Name, ns),
+				fmt.Sprintf("%s", app.Name),
 				fmt.Sprintf("%s.%s", svc.Name, ns),
 				fmt.Sprintf("%s", svc.Name),
+				fmt.Sprintf("%s-nodeport.%s", app.Name, ns),
+				fmt.Sprintf("%s-nodeport", app.Name),
+				fmt.Sprintf("%s-nodeport.%s", svc.Name, ns),
+				fmt.Sprintf("%s-nodeport", svc.Name),
 				"localhost",
 			},
 		})
@@ -560,15 +577,15 @@ func genSystemCert(sec security.Security) error {
 		return errors.Trace(err)
 	}
 
-	err = utils.CreateWriteFile(path.Join(context.SystemCertPath, context.SystemCertCA), ca)
+	err = utils.CreateWriteFile(filepath.Join(context.SystemCertPath, context.SystemCertCA), ca)
 	if err != nil {
 		return errors.Trace(err)
 	}
-	err = utils.CreateWriteFile(path.Join(context.SystemCertPath, context.SystemCertCrt), cert.Crt)
+	err = utils.CreateWriteFile(filepath.Join(context.SystemCertPath, context.SystemCertCrt), cert.Crt)
 	if err != nil {
 		return errors.Trace(err)
 	}
-	err = utils.CreateWriteFile(path.Join(context.SystemCertPath, context.SystemCertKey), cert.Key)
+	err = utils.CreateWriteFile(filepath.Join(context.SystemCertPath, context.SystemCertKey), cert.Key)
 	if err != nil {
 		return errors.Trace(err)
 	}
